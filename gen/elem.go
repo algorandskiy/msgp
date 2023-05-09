@@ -155,20 +155,23 @@ func (c Callback) GetName() string            { return c.Fname }
 
 // common data/methods for every Elem
 type common struct {
-	vname, alias string
-	allocbound   string
-	callbacks    []Callback
+	vname, alias    string
+	allocbound      string
+	totalallocbound string
+	callbacks       []Callback
 }
 
-func (c *common) SetVarname(s string)      { c.vname = s }
-func (c *common) Varname() string          { return c.vname }
-func (c *common) Alias(typ string)         { c.alias = typ }
-func (c *common) SortInterface() string    { return "" }
-func (c *common) SetAllocBound(s string)   { c.allocbound = s }
-func (c *common) AllocBound() string       { return c.allocbound }
-func (c *common) GetCallbacks() []Callback { return c.callbacks }
-func (c *common) AddCallback(cb Callback)  { c.callbacks = append(c.callbacks, cb) }
-func (c *common) hidden()                  {}
+func (c *common) SetVarname(s string)         { c.vname = s }
+func (c *common) Varname() string             { return c.vname }
+func (c *common) Alias(typ string)            { c.alias = typ }
+func (c *common) SortInterface() string       { return "" }
+func (c *common) SetAllocBound(s string)      { c.allocbound = s }
+func (c *common) AllocBound() string          { return c.allocbound }
+func (c *common) SetTotalAllocBound(s string) { c.totalallocbound = s }
+func (c *common) TotalAllocBound() string     { return c.totalallocbound }
+func (c *common) GetCallbacks() []Callback    { return c.callbacks }
+func (c *common) AddCallback(cb Callback)     { c.callbacks = append(c.callbacks, cb) }
+func (c *common) hidden()                     {}
 
 func IsDangling(e Elem) bool {
 	if be, ok := e.(*BaseElem); ok && be.Dangling() {
@@ -240,6 +243,15 @@ type Elem interface {
 	// AllocBound returns the maximum number of elements to allocate
 	// when decoding this type.  Meaningful for slices and maps.
 	AllocBound() string
+
+	// SetTotalAllocBound specifies the maximum number of bytes to allocate when
+	// decoding this type. Meaningful for slices of strings or byteslices.
+	// Blank means unspecified bound.  "-" means no bound.
+	SetTotalAllocBound(bound string)
+
+	// TotalAllocBound specifies the maximum number of bytes to allocate when
+	// decoding this type. Meaningful for slices of strings or byteslices.
+	TotalAllocBound() string
 
 	// AddCallback adds to the elem a Callback it should call at the end of marshaling
 	AddCallback(Callback)

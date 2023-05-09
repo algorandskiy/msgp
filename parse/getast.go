@@ -252,6 +252,8 @@ func strToMethod(s string) gen.Method {
 		return gen.Marshal
 	case "unmarshal":
 		return gen.Unmarshal
+	case "maxsize":
+		return gen.MaxSize
 	default:
 		return 0
 	}
@@ -407,6 +409,7 @@ func (fs *FileSet) getField(importPrefix string, f *ast.Field) []gen.StructField
 	var extension, flatten bool
 	var allocbound string
 	var allocbounds []string
+	var totalallocbound string
 
 	// always flatten embedded structs
 	flatten = true
@@ -422,6 +425,9 @@ func (fs *FileSet) getField(importPrefix string, f *ast.Field) []gen.StructField
 			}
 			if strings.HasPrefix(tag, "allocbound=") {
 				allocbounds = append(allocbounds, strings.Split(tag, "=")[1])
+			}
+			if strings.HasPrefix(tag, "totalallocbound=") {
+				totalallocbound = strings.Split(tag, "=")[1]
 			}
 		}
 		// ignore "-" fields
@@ -480,6 +486,7 @@ func (fs *FileSet) getField(importPrefix string, f *ast.Field) []gen.StructField
 		sf[0].FieldTagParts = []string{sf[0].FieldName}
 	}
 	sf[0].FieldElem.SetAllocBound(allocbound)
+	sf[0].FieldElem.SetTotalAllocBound(totalallocbound)
 
 	// validate extension
 	if extension {
