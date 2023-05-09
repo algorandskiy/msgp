@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"io"
@@ -76,7 +77,7 @@ func (s *maxSizeGen) Execute(p Elem) ([]string, error) {
 		baseType := p.(*BaseElem).IdentName
 		ptrName := p.Varname()
 		receiver := methodReceiver(p)
-		s.p.printf("\nfunc (%s %s) MaxSize() int {", ptrName, receiver)
+		s.p.printf("\nfunc %s int{", getMaxSizeMethod(p.TypeName()))
 		s.p.printf("\n  return ((*(%s))(%s)).MaxSize()", baseType, ptrName)
 		s.p.printf("\n}")
 		s.topics.Add(receiver, "MaxSize")
@@ -86,12 +87,12 @@ func (s *maxSizeGen) Execute(p Elem) ([]string, error) {
 	s.ctx = &Context{}
 	s.ctx.PushString(p.TypeName())
 
-	ptrName := p.Varname()
 	receiver := imutMethodReceiver(p)
-	s.p.printf("\nfunc (%s %s) MaxSize() (s int) {", ptrName, receiver)
+	s.p.printf("\nfunc  %s (s int) {", getMaxSizeMethod(p.TypeName()))
 	s.state = assign
 	next(s, p)
 	s.p.nakedReturn()
+	// Unnecessary for "static" method but need to keep it for rest of the code to work for now TODO: remove
 	s.topics.Add(receiver, "MaxSize")
 	return nil, s.p.err
 }
@@ -139,10 +140,8 @@ func (s *maxSizeGen) gStruct(st *Struct) {
 
 func (s *maxSizeGen) gPtr(p *Ptr) {
 	s.state = add // inner must use add
-	s.p.printf("\nif %s == nil {\ns += msgp.NilSize\n} else {", p.Varname())
 	next(s, p.Value)
 	s.state = add // closing block; reset to add
-	s.p.closeblock()
 }
 
 func (s *maxSizeGen) gSlice(sl *Slice) {
@@ -193,14 +192,15 @@ func (s *maxSizeGen) gArray(a *Array) {
 	// if the array's children are a fixed
 	// size, we can compile an expression
 	// that always represents the array's wire size
-	if str, ok := fixedsizeExpr(a); ok {
-		s.addConstant(str)
+	if str, err := fixedMaxSizeExpr(a); err == nil {
+		s.addConstant(fmt.Sprintf("((%s) * (%s))", a.Size, str))
 		return
-	}
+	} else {
+		s.p.printf("\npanic(\"Unable to determine max size: %s\")", err)
+		s.state = add // reset the add to prevent further + expressions from being added to the end the panic statement
+		return
 
-	s.state = add
-	s.p.rangeBlock(s.ctx, a.Index, a.Varname(), s, a.Els)
-	s.state = add
+	}
 }
 
 func (s *maxSizeGen) gMap(m *Map) {
@@ -267,7 +267,7 @@ func baseMaxSizeExpr(value Primitive, vname, basename, typename string, allocbou
 	case Intf:
 		return "msgp.GuessSize(" + vname + ")", nil
 	case IDENT:
-		return vname + ".MaxSize()", nil
+		return getMaxSizeMethod(typename), nil
 	case Bytes:
 		if allocbound == "" || allocbound == "-" {
 			return "", fmt.Errorf("Byteslice type %s is unbounded", vname)
@@ -305,7 +305,7 @@ func fixedMaxSizeExpr(e Elem) (string, error) {
 			}
 			return fmt.Sprintf("(msgp.StringPrefixSize + %s)", e.AllocBound()), nil
 		} else if (e.Value) == IDENT {
-			return fmt.Sprintf("((&(%s{})).MaxSize())", e.TypeName()), nil
+			return fmt.Sprintf("(%s)", getMaxSizeMethod(e.TypeName())), nil
 		} else if (e.Value) == Bytes {
 			if e.AllocBound() == "" || e.AllocBound() == "-" {
 				return "", fmt.Errorf("Inner byteslice type is unbounded")
@@ -313,7 +313,7 @@ func fixedMaxSizeExpr(e Elem) (string, error) {
 			return fmt.Sprintf("(msgp.BytesPrefixSize + %s)", e.AllocBound()), nil
 		}
 	case *Struct:
-		return fmt.Sprintf("((&(%s{})).MaxSize())", e.TypeName()), nil
+		return fmt.Sprintf("(%s)", getMaxSizeMethod(e.TypeName())), nil
 	case *Slice:
 		if e.AllocBound() == "" || e.AllocBound() == "-" {
 			return "", fmt.Errorf("Slice %s is unbounded", e.Varname())
@@ -325,4 +325,15 @@ func fixedMaxSizeExpr(e Elem) (string, error) {
 		}
 	}
 	return fmt.Sprintf("%s, %s", e.TypeName(), reflect.TypeOf(e)), nil
+}
+
+func getMaxSizeMethod(typeName string) (s string) {
+	var pos int
+	dotIndex := strings.Index(typeName, ".")
+	if dotIndex != -1 {
+		pos = dotIndex + 1
+	}
+	b := []byte(typeName)
+	b[pos] = bytes.ToUpper(b)[pos]
+	return string(b) + "MaxSize()"
 }
