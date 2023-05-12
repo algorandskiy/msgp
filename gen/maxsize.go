@@ -30,16 +30,18 @@ const (
 
 func maxSizes(w io.Writer, topics *Topics) *maxSizeGen {
 	return &maxSizeGen{
-		p:     printer{w: w},
-		state: assignM,
+		p:      printer{w: w},
+		state:  assignM,
+		topics: topics,
 	}
 }
 
 type maxSizeGen struct {
 	passes
-	p     printer
-	state maxSizeState
-	ctx   *Context
+	p      printer
+	state  maxSizeState
+	ctx    *Context
+	topics *Topics
 }
 
 func (s *maxSizeGen) Method() Method { return MaxSize }
@@ -93,12 +95,10 @@ func (s *maxSizeGen) Execute(p Elem) ([]string, error) {
 
 	if IsDangling(p) {
 		baseType := p.(*BaseElem).IdentName
-		// ptrName := p.Varname()
-		// receiver := methodReceiver(p)
 		s.p.printf("\nfunc %s int{", getMaxSizeMethod(p.TypeName()))
 		s.p.printf("\n  return %s", getMaxSizeMethod(baseType))
 		s.p.printf("\n}")
-		// s.topics.Add(receiver, "MaxSize")
+		s.topics.Add(baseType, getMaxSizeMethod(baseType))
 		return nil, s.p.err
 	}
 
@@ -110,8 +110,7 @@ func (s *maxSizeGen) Execute(p Elem) ([]string, error) {
 	s.state = assignM
 	next(s, p)
 	s.p.nakedReturn()
-	// Unnecessary for "static" method but need to keep it for rest of the code to work for now TODO: remove
-	// s.topics.Add(receiver, "MaxSize")
+	s.topics.Add(p.TypeName(), getMaxSizeMethod(p.TypeName()))
 	return nil, s.p.err
 }
 
