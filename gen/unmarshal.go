@@ -241,14 +241,14 @@ func (u *unmarshalGen) gBase(b *BaseElem) {
 		if b.common.AllocBound() != "" {
 			sz := randIdent()
 			u.p.printf("\nvar %s int", sz)
-			u.p.printf("\n%s, err = msgp.ReadStringBytesHeader(bts)", sz)
+			u.p.printf("\n%s, err = msgp.ReadBytesBytesHeader(bts)", sz)
 			u.p.wrapErrCheck(u.ctx.ArgsStr())
 			u.p.printf("\nif %s > %s {", sz, b.common.AllocBound())
 			u.p.printf("\nerr = msgp.ErrOverflow(uint64(%s), uint64(%s))", sz, b.common.AllocBound())
 			u.p.printf("\nreturn")
 			u.p.printf("\n}")
 		}
-		u.p.printf("\n%s, bts, err = msgp.Read%sBytes(bts)", refname, b.BaseName())
+		u.p.printf("\n%s, bts, err = msgp.ReadStringBytes(bts)", refname)
 	default:
 		u.p.printf("\n%s, bts, err = msgp.Read%sBytes(bts)", refname, b.BaseName())
 	}

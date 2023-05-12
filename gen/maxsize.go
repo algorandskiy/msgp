@@ -12,20 +12,34 @@ import (
 	"github.com/algorand/msgp/msgp"
 )
 
+type maxSizeState uint8
+
+const (
+	// need to write "s = ..."
+	assignM maxSizeState = iota
+
+	// need to write "s += ..."
+	addM
+
+	// can just append "+ ..."
+	exprM
+
+	multM
+	// the result is multiplied by whatever is preceeding it
+)
+
 func maxSizes(w io.Writer, topics *Topics) *maxSizeGen {
 	return &maxSizeGen{
-		p:      printer{w: w},
-		state:  assign,
-		topics: topics,
+		p:     printer{w: w},
+		state: assignM,
 	}
 }
 
 type maxSizeGen struct {
 	passes
-	p      printer
-	state  sizeState
-	ctx    *Context
-	topics *Topics
+	p     printer
+	state maxSizeState
+	ctx   *Context
 }
 
 func (s *maxSizeGen) Method() Method { return MaxSize }
@@ -42,16 +56,20 @@ func (s *maxSizeGen) addConstant(sz string) {
 	}
 
 	switch s.state {
-	case assign:
+	case assignM:
 		s.p.print("\ns = " + sz)
-		s.state = expr
+		s.state = exprM
 		return
-	case add:
+	case addM:
 		s.p.print("\ns += " + sz)
-		s.state = expr
+		s.state = exprM
 		return
-	case expr:
+	case exprM:
 		s.p.print(" + " + sz)
+		return
+	case multM:
+		s.p.print(" * ( " + sz + ")")
+		s.state = addM
 		return
 	}
 
@@ -75,25 +93,25 @@ func (s *maxSizeGen) Execute(p Elem) ([]string, error) {
 
 	if IsDangling(p) {
 		baseType := p.(*BaseElem).IdentName
-		ptrName := p.Varname()
-		receiver := methodReceiver(p)
+		// ptrName := p.Varname()
+		// receiver := methodReceiver(p)
 		s.p.printf("\nfunc %s int{", getMaxSizeMethod(p.TypeName()))
-		s.p.printf("\n  return ((*(%s))(%s)).MaxSize()", baseType, ptrName)
+		s.p.printf("\n  return %s", getMaxSizeMethod(baseType))
 		s.p.printf("\n}")
-		s.topics.Add(receiver, "MaxSize")
+		// s.topics.Add(receiver, "MaxSize")
 		return nil, s.p.err
 	}
 
 	s.ctx = &Context{}
 	s.ctx.PushString(p.TypeName())
 
-	receiver := imutMethodReceiver(p)
+	// receiver := imutMethodReceiver(p)
 	s.p.printf("\nfunc  %s (s int) {", getMaxSizeMethod(p.TypeName()))
-	s.state = assign
+	s.state = assignM
 	next(s, p)
 	s.p.nakedReturn()
 	// Unnecessary for "static" method but need to keep it for rest of the code to work for now TODO: remove
-	s.topics.Add(receiver, "MaxSize")
+	// s.topics.Add(receiver, "MaxSize")
 	return nil, s.p.err
 }
 
@@ -139,9 +157,9 @@ func (s *maxSizeGen) gStruct(st *Struct) {
 }
 
 func (s *maxSizeGen) gPtr(p *Ptr) {
-	s.state = add // inner must use add
+	s.state = addM // inner must use add
 	next(s, p.Value)
-	s.state = add // closing block; reset to add
+	s.state = addM // closing block; reset to add
 }
 
 func (s *maxSizeGen) gSlice(sl *Slice) {
@@ -150,7 +168,7 @@ func (s *maxSizeGen) gSlice(sl *Slice) {
 	}
 	if (sl.AllocBound() == "" || sl.AllocBound() == "-") && (sl.TotalAllocBound() == "" || sl.TotalAllocBound() == "-") {
 		s.p.printf("\npanic(\"Slice %s is unbounded\")", sl.Varname())
-		s.state = add // reset the add to prevent further + expressions from being added to the end the panic statement
+		s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
 		return
 	}
 
@@ -163,21 +181,20 @@ func (s *maxSizeGen) gSlice(sl *Slice) {
 	}
 
 	topLevelAllocBound := sl.AllocBound()
+	childElement := sl.Els
 	if sl.Els.AllocBound() == "" && len(strings.Split(sl.AllocBound(), ",")) > 1 {
 		splitIndex := strings.Index(sl.AllocBound(), ",")
-		sl.Els.SetAllocBound(sl.AllocBound()[splitIndex+1:])
+		childElement = sl.Els.Copy()
+		childElement.SetAllocBound(sl.AllocBound()[splitIndex+1:])
 		topLevelAllocBound = sl.AllocBound()[:splitIndex]
 	}
 
-	// if the slice's element is a fixed size
-	// (e.g. float64, [32]int, etc.), then
-	// print the allocbound times the element size directly
-	if str, err := fixedMaxSizeExpr(sl.Els); err == nil {
+	if str, err := fixedMaxSizeExpr(childElement); err == nil {
 		s.addConstant(fmt.Sprintf("((%s) * (%s))", topLevelAllocBound, str))
 		return
 	} else {
 		s.p.printf("\npanic(\"Unable to determine max size: %s\")", err)
-		s.state = add // reset the add to prevent further + expressions from being added to the end the panic statement
+		s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
 		return
 	}
 }
@@ -189,36 +206,46 @@ func (s *maxSizeGen) gArray(a *Array) {
 
 	s.addConstant(builtinSize(arrayHeader))
 
-	// if the array's children are a fixed
-	// size, we can compile an expression
-	// that always represents the array's wire size
-	if str, err := fixedMaxSizeExpr(a); err == nil {
+	if str, err := fixedMaxSizeExpr(a.Els); err == nil {
 		s.addConstant(fmt.Sprintf("((%s) * (%s))", a.Size, str))
 		return
 	} else {
 		s.p.printf("\npanic(\"Unable to determine max size: %s\")", err)
-		s.state = add // reset the add to prevent further + expressions from being added to the end the panic statement
+		s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
 		return
 
 	}
 }
 
 func (s *maxSizeGen) gMap(m *Map) {
-	s.addConstant(builtinSize(mapHeader))
 	vn := m.Varname()
-	s.p.printf("\nif %s != nil {", vn)
-	s.p.printf("\nfor %s, %s := range %s {", m.Keyidx, m.Validx, vn)
-	s.p.printf("\n_ = %s", m.Keyidx) // we may not use the key
-	s.p.printf("\n_ = %s", m.Validx) // we may not use the value
-	s.p.printf("\ns += 0")
-	s.state = expr
-	s.ctx.PushVar(m.Keyidx)
+	s.addConstant(builtinSize(mapHeader))
+	topLevelAllocBound := m.AllocBound()
+	if topLevelAllocBound != "" && topLevelAllocBound == "-" {
+		s.p.printf("\npanic(\"Map %s is unbounded\")", m.Varname())
+		s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
+		return
+	}
+	splitBounds := strings.Split(m.AllocBound(), ",")
+	if len(splitBounds) > 1 {
+		topLevelAllocBound = splitBounds[0]
+		m.Key.SetAllocBound(splitBounds[1])
+		if len(splitBounds) > 2 {
+			m.Value.SetAllocBound(splitBounds[2])
+		}
+	}
+
+	s.p.comment("Adding size of map keys for " + vn)
+	s.p.printf("\ns += %s", topLevelAllocBound)
+	s.state = multM
 	next(s, m.Key)
+
+	s.p.comment("Adding size of map values for " + vn)
+	s.p.printf("\ns += %s", topLevelAllocBound)
+	s.state = multM
 	next(s, m.Value)
-	s.ctx.Pop()
-	s.p.closeblock()
-	s.p.closeblock()
-	s.state = add
+
+	s.state = addM
 }
 
 func (s *maxSizeGen) gBase(b *BaseElem) {
@@ -226,7 +253,7 @@ func (s *maxSizeGen) gBase(b *BaseElem) {
 		return
 	}
 	if b.Convert && b.ShimMode == Convert {
-		s.state = add
+		s.state = addM
 		vname := randIdent()
 		s.p.printf("\nvar %s %s", vname, b.BaseType())
 
@@ -236,11 +263,11 @@ func (s *maxSizeGen) gBase(b *BaseElem) {
 		value, err := baseMaxSizeExpr(b.Value, vname, b.BaseName(), b.TypeName(), b.common.AllocBound())
 		if err != nil {
 			s.p.printf("\npanic(\"Unable to determine max size: %s\")", err)
-			s.state = add // reset the add to prevent further + expressions from being added to the end the panic statement
+			s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
 			return
 		}
 		s.p.printf("\ns += %s", value)
-		s.state = expr
+		s.state = exprM
 
 	} else {
 		vname := b.Varname()
@@ -250,7 +277,7 @@ func (s *maxSizeGen) gBase(b *BaseElem) {
 		value, err := baseMaxSizeExpr(b.Value, vname, b.BaseName(), b.TypeName(), b.common.AllocBound())
 		if err != nil {
 			s.p.printf("\npanic(\"Unable to determine max size: %s\")", err)
-			s.state = add // reset the add to prevent further + expressions from being added to the end the panic statement
+			s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
 			return
 		}
 		s.addConstant(value)
@@ -265,7 +292,7 @@ func baseMaxSizeExpr(value Primitive, vname, basename, typename string, allocbou
 	case Ext:
 		return "", fmt.Errorf("MaxSize() not implemented for Ext type")
 	case Intf:
-		return "msgp.GuessSize(" + vname + ")", nil
+		return "", fmt.Errorf("MaxSize() not implemented for Interfaces")
 	case IDENT:
 		return getMaxSizeMethod(typename), nil
 	case Bytes:
