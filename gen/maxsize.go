@@ -165,6 +165,8 @@ func (s *maxSizeGen) gSlice(sl *Slice) {
 	if !s.p.ok() {
 		return
 	}
+	s.state = addM
+	s.p.comment("Calculating size of slice: " + sl.Varname())
 	if (sl.AllocBound() == "" || sl.AllocBound() == "-") && (sl.TotalAllocBound() == "" || sl.TotalAllocBound() == "-") {
 		s.p.printf("\npanic(\"Slice %s is unbounded\")", sl.Varname())
 		s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
@@ -188,36 +190,37 @@ func (s *maxSizeGen) gSlice(sl *Slice) {
 		topLevelAllocBound = sl.AllocBound()[:splitIndex]
 	}
 
-	if str, err := fixedMaxSizeExpr(childElement); err == nil {
+	if str, err := maxSizeExpr(childElement); err == nil {
 		s.addConstant(fmt.Sprintf("((%s) * (%s))", topLevelAllocBound, str))
-		return
 	} else {
 		s.p.printf("\npanic(\"Unable to determine max size: %s\")", err)
-		s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
-		return
 	}
+	s.state = addM
+	return
 }
 
 func (s *maxSizeGen) gArray(a *Array) {
 	if !s.p.ok() {
 		return
 	}
+	s.state = addM
+	s.p.comment("Calculating size of array: " + a.Varname())
 
 	s.addConstant(builtinSize(arrayHeader))
 
-	if str, err := fixedMaxSizeExpr(a.Els); err == nil {
+	if str, err := maxSizeExpr(a.Els); err == nil {
 		s.addConstant(fmt.Sprintf("((%s) * (%s))", a.Size, str))
-		return
 	} else {
 		s.p.printf("\npanic(\"Unable to determine max size: %s\")", err)
-		s.state = addM // reset the add to prevent further + expressions from being added to the end the panic statement
-		return
 
 	}
+	s.state = addM
+	return
 }
 
 func (s *maxSizeGen) gMap(m *Map) {
 	vn := m.Varname()
+	s.state = addM
 	s.addConstant(builtinSize(mapHeader))
 	topLevelAllocBound := m.AllocBound()
 	if topLevelAllocBound != "" && topLevelAllocBound == "-" {
@@ -312,10 +315,10 @@ func baseMaxSizeExpr(value Primitive, vname, basename, typename string, allocbou
 // return a fixed-size expression, if possible.
 // only possible for *BaseElem, *Array and Struct.
 // returns (expr, err)
-func fixedMaxSizeExpr(e Elem) (string, error) {
+func maxSizeExpr(e Elem) (string, error) {
 	switch e := e.(type) {
 	case *Array:
-		if str, err := fixedMaxSizeExpr(e.Els); err == nil {
+		if str, err := maxSizeExpr(e.Els); err == nil {
 			return fmt.Sprintf("(%s * (%s))", e.Size, str), nil
 		} else {
 			return "", err
@@ -344,7 +347,7 @@ func fixedMaxSizeExpr(e Elem) (string, error) {
 		if e.AllocBound() == "" || e.AllocBound() == "-" {
 			return "", fmt.Errorf("Slice %s is unbounded", e.Varname())
 		}
-		if str, err := fixedMaxSizeExpr(e.Els); err == nil {
+		if str, err := maxSizeExpr(e.Els); err == nil {
 			return fmt.Sprintf("(%s * (%s))", e.AllocBound(), str), nil
 		} else {
 			return "", err
