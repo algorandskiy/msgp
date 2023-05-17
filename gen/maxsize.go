@@ -254,6 +254,13 @@ func (s *maxSizeGen) gBase(b *BaseElem) {
 	if !s.p.ok() {
 		return
 	}
+	if b.TotalAllocBound() != "" {
+		s.p.comment("Using totalallocbound for: " + b.Varname())
+		s.state = addM
+		s.addConstant(b.TotalAllocBound())
+		s.state = addM
+		return
+	}
 	if b.Convert && b.ShimMode == Convert {
 		s.state = addM
 		vname := randIdent()
