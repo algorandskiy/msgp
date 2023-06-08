@@ -478,6 +478,31 @@ func (fs *FileSet) getField(importPrefix string, f *ast.Field) []gen.StructField
 		}
 		return sf
 	}
+
+	// resolve local package type aliases that referenced in this package structs
+	resolveAlias := func(el gen.Elem) {
+		if a, ok := fs.Aliases[el.TypeName()]; ok {
+			if b, ok := a.(*ast.SelectorExpr); ok {
+				if c, ok := b.X.(*ast.Ident); ok {
+					el.Alias(c.Name + "." + b.Sel.Name)
+				}
+			} else if b, ok := a.(*ast.Ident); ok {
+				el.Alias(b.Name)
+			}
+		}
+	}
+	// resolve field alias type
+	resolveAlias(ex)
+	// resolve field map type that have alias type key or value
+	if m, ok := ex.(*gen.Map); ok {
+		resolveAlias(m.Key)
+		resolveAlias(m.Value)
+	}
+	// resolve field slice type that have alias type element
+	if m, ok := ex.(*gen.Slice); ok {
+		resolveAlias(m.Els)
+	}
+
 	sf[0].FieldElem = ex
 	if sf[0].FieldTag == "" {
 		sf[0].FieldTag = sf[0].FieldName
